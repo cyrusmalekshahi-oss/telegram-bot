@@ -1,4 +1,5 @@
 {
   "blocked": [],
-  "tickets": {}
+  "tickets": {},
+  "bot_active": true
 }
