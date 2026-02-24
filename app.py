@@ -12,7 +12,6 @@ GROUP_ID = int(os.environ.get("-1003751936222"))
 ADMIN_ID = int(os.environ.get("7861717112"))
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
 DATA_FILE = "data.json"
 
 def load_data():
@@ -23,14 +22,16 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
-def send_message(chat_id, text):
+def send_message(chat_id, text, reply_markup=None):
     url = f"{TELEGRAM_API}/sendMessage"
-    data = {
+    payload = {
         "chat_id": chat_id,
         "text": text,
         "parse_mode": "HTML"
     }
-    requests.post(url, json=data)
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    requests.post(url, json=payload)
 
 def generate_tracking_code():
     return "#" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
@@ -40,7 +41,6 @@ def webhook():
     update = request.json
     data = load_data()
 
-    # پیام معمولی
     if "message" in update:
         message = update["message"]
         chat_id = message["chat"]["id"]
@@ -52,36 +52,60 @@ def webhook():
         # فقط ادمین داخل گروه
         if chat_id == GROUP_ID and user_id == ADMIN_ID:
 
-            # بلاک
-            if text.startswith("/block"):
-                target = int(text.split()[1])
-                if target not in data["blocked"]:
-                    data["blocked"].append(target)
-                    save_data(data)
-                send_message(GROUP_ID, "⛔ کاربر بلاک شد.")
+            # روشن کردن بات
+            if text.strip() == "روشن":
+                data["bot_active"] = True
+                save_data(data)
+                send_message(GROUP_ID, "✅ بات فعال شد.")
                 return "ok"
 
-            # آنبلاک
-            if text.startswith("/unblock"):
-                target = int(text.split()[1])
-                if target in data["blocked"]:
-                    data["blocked"].remove(target)
-                    save_data(data)
-                send_message(GROUP_ID, "✅ کاربر آنبلاک شد.")
+            # خاموش کردن بات
+            if text.strip() == "خاموش":
+                data["bot_active"] = False
+                save_data(data)
+                send_message(GROUP_ID, "⛔ بات غیرفعال شد.")
                 return "ok"
 
-            # ریپلای برای پاسخ
+            # اگر ریپلای باشد
             if "reply_to_message" in message:
-                replied = message["reply_to_message"]["text"]
-                if "🆔 آیدی:" in replied:
-                    user_id_line = replied.split("🆔 آیدی:")[1]
-                    target_id = int(user_id_line.split("\n")[0].strip())
+                replied_text = message["reply_to_message"]["text"]
+
+                if "🆔 آیدی:" in replied_text:
+                    target_id = int(replied_text.split("🆔 آیدی:")[1].split("\n")[0].strip())
+
+                    if text.strip() == "بلاک":
+                        if target_id not in data["blocked"]:
+                            data["blocked"].append(target_id)
+                            save_data(data)
+                        send_message(GROUP_ID, "⛔ کاربر بلاک شد.")
+                        return "ok"
+
+                    if text.strip() == "آنبلاک":
+                        if target_id in data["blocked"]:
+                            data["blocked"].remove(target_id)
+                            save_data(data)
+                        send_message(GROUP_ID, "✅ کاربر آنبلاک شد.")
+                        return "ok"
+
+                    # پاسخ عادی
                     send_message(target_id, f"📩 پاسخ ادمین:\n\n{text}")
                     return "ok"
 
         # اگر کاربر بلاک باشد
         if user_id in data["blocked"]:
             send_message(chat_id, "⛔ شما مسدود شده‌اید.")
+            return "ok"
+
+        # اگر بات خاموش باشد
+        if not data.get("bot_active", True):
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "📩 ارتباط با ادمین", "callback_data": "contact"}]
+                ]
+            }
+            send_message(chat_id,
+                         "⚠️ درحال حاضر امکان ارسال پیام وجود ندارد.\nلطفا مجددا امتحان کنید.",
+                         keyboard)
             return "ok"
 
         # استارت
@@ -92,17 +116,13 @@ def webhook():
                 ]
             }
             send_message(chat_id,
-                         "👋 <b>به ربات ارتباط با ادمین خوش آمدید</b>\n\nروی دکمه زیر بزنید.",
-                         )
-            requests.post(f"{TELEGRAM_API}/sendMessage", json={
-                "chat_id": chat_id,
-                "text": "👇 انتخاب کنید:",
-                "reply_markup": keyboard
-            })
+                         "👋 <b>به سیستم ارتباط با مدیریت خوش آمدید</b>\n\n"
+                         "برای ارسال پیام روی دکمه زیر کلیک کنید.",
+                         keyboard)
             return "ok"
 
         # ارسال پیام کاربر
-        if chat_id != GROUP_ID and user_id != ADMIN_ID:
+        if chat_id != GROUP_ID:
             tracking = generate_tracking_code()
             data["tickets"][tracking] = user_id
             save_data(data)
@@ -115,9 +135,24 @@ def webhook():
                 f"📌 کد پیگیری: {tracking}\n\n"
                 f"💬 متن:\n{text}"
             )
+
             send_message(GROUP_ID, admin_text)
-            send_message(chat_id, f"✅ پیام شما ارسال شد.\nکد پیگیری شما: {tracking}")
+            send_message(chat_id,
+                         f"✅ پیام شما با موفقیت ارسال شد.\n"
+                         f"📌 کد پیگیری شما: {tracking}")
             return "ok"
+
+    if "callback_query" in update:
+        query = update["callback_query"]
+        chat_id = query["message"]["chat"]["id"]
+
+        if not load_data().get("bot_active", True):
+            send_message(chat_id,
+                         "⚠️ درحال حاضر امکان ارسال پیام وجود ندارد.\nلطفا مجددا امتحان کنید.")
+            return "ok"
+
+        send_message(chat_id, "✍️ پیام خود را ارسال کنید:")
+        return "ok"
 
     return "ok"
 
